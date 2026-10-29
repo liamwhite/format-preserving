@@ -8,7 +8,3 @@ edition = "2018"
 
 [profile.release]
 panic = "abort"
-
-[dependencies]
-rand = "0.8.0"
-ahash = "0.7.3"

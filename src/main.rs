@@ -1,16 +1,16 @@
-use ahash::AHasher;
-use std::hash::Hasher;
-
-// AES-round based hasher
-fn hash_ahash(input: u64) -> u64 {
-    let mut hasher = AHasher::new_with_keys(0x5f7788c56cb54593, 0x76fa89eb1eef921d);
-    hasher.write_u64(input);
-    hasher.finish()
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e3779b97f4a7c15);
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d049bb133111eb);
+    x ^= x >> 31;
+    x
 }
 
-// AHash PRF with minimal key schedule
-fn ahash_prf(data: u64, key: u64, round: u32) -> u64 {
-    hash_ahash(data ^ key.rotate_left(round))
+// SplitMix64 PRF with minimal key schedule
+fn splitmix64_prf(data: u64, key: u64, round: u32) -> u64 {
+    splitmix64(data ^ key.rotate_left(round))
 }
 
 fn mask(bits: u32) -> u64 {
@@ -46,6 +46,10 @@ where
 // Returns a random permutation of integers 0..n with no repeats or skips
 // Key can be used to influence the generated permutation
 fn cycle_walking_fpe(input: u64, n: u64, key: u64) -> u64 {
+    if n <= 1 {
+        return input;
+    }
+
     let bits = 64 - (n - 1).leading_zeros();
     let left_bits = bits >> 1;
     let right_bits = bits - left_bits;
@@ -54,7 +58,7 @@ fn cycle_walking_fpe(input: u64, n: u64, key: u64) -> u64 {
 
     loop {
         output = feistel_evaluate::<4, _>(output, left_bits, right_bits, |data, round| {
-            ahash_prf(data, key, round)
+            splitmix64_prf(data, key, round)
         });
 
         if output < n {
@@ -65,7 +69,7 @@ fn cycle_walking_fpe(input: u64, n: u64, key: u64) -> u64 {
 
 fn main() {
     for i in 0..1024 {
-        println!("{}", cycle_walking_fpe(i, 1024, hash_ahash(1)));
+        println!("{}", cycle_walking_fpe(i, 1024, splitmix64(1)));
     }
 }
 
@@ -87,7 +91,7 @@ mod tests {
 
         for s in samples {
             let mut v: Vec<u32> = Vec::with_capacity(s as usize);
-            let rnd = hash_ahash(1);
+            let rnd = splitmix64(1);
 
             for j in 0..s {
                 v.push(cycle_walking_fpe(j as u64, s as u64, rnd) as u32);
@@ -107,7 +111,7 @@ mod tests {
     fn test_reasonable_entropy() {
         let mut v: Vec<u64> = vec![0; 256];
         let mut p: Vec<f64> = vec![0.; 8];
-        let rnd = hash_ahash(1);
+        let rnd = splitmix64(1);
 
         for j in 0..256 {
             v[j] = cycle_walking_fpe(j as u64, 256, rnd);
