@@ -1,8 +1,3 @@
-#![feature(test)]
-
-extern crate rand;
-extern crate test;
-
 use ahash::AHasher;
 use std::hash::Hasher;
 
@@ -13,23 +8,38 @@ fn hash_ahash(input: u64) -> u64 {
     hasher.finish()
 }
 
-// 4-round Feistel network using AES as the round PRF and no key schedule
-// Same key is used for each round
-fn feistel_evaluate(input: u64, left_bits: u32, right_bits: u32, key: u64) -> u64 {
-    let left_mask = (1u64 << left_bits) - 1;
-    let right_mask = (1u64 << right_bits) - 1;
+// AHash PRF with minimal key schedule
+fn ahash_prf(data: u64, key: u64, round: u32) -> u64 {
+    hash_ahash(data ^ key.rotate_left(round))
+}
 
-    let mut output = input;
+fn mask(bits: u32) -> u64 {
+    (1u64 << bits) - 1
+}
 
-    for _ in 0..4 {
-        let l = (output >> right_bits) & left_mask;
-        let r = output & right_mask;
-        let t = (l ^ hash_ahash(r ^ key)) & left_mask;
+// N-round Feistel network
+fn feistel_evaluate<const N: u32, F>(input: u64, left_bits: u32, right_bits: u32, prf: F) -> u64
+where
+    F: Fn(u64, u32) -> u64,
+{
+    let (l, r, _, right_bits) = (0..N).fold(
+        (
+            (input >> right_bits) & mask(left_bits),
+            input & mask(right_bits),
+            left_bits,
+            right_bits,
+        ),
+        |(l, r, left_bits, right_bits), round| {
+            (
+                r,
+                l ^ (prf(r, round) & mask(left_bits)),
+                right_bits,
+                left_bits,
+            )
+        },
+    );
 
-        output = (r << left_bits) | (t & right_mask);
-    }
-
-    output
+    (l << right_bits) | r
 }
 
 // Format-preserving encryption via cycle-walking for sets of size n
@@ -43,7 +53,9 @@ fn cycle_walking_fpe(input: u64, n: u64, key: u64) -> u64 {
     let mut output = input;
 
     loop {
-        output = feistel_evaluate(output, left_bits, right_bits, key);
+        output = feistel_evaluate::<4, _>(output, left_bits, right_bits, |data, round| {
+            ahash_prf(data, key, round)
+        });
 
         if output < n {
             break output;
@@ -60,20 +72,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test::{Bencher, black_box};
 
     #[test]
     fn test_bijection_sample() {
         let samples: Vec<u32> = vec![
-            16, 461, 161, 324, 879, 104, 820, 742, 783, 795, 735, 619, 217,
-            267, 282, 575, 581, 709, 10, 698, 656, 1004, 1005, 467, 445, 787,
-            25345, 11322, 10856, 42540, 55356, 10564, 57473, 49024, 8159,
-            8337, 47787, 36844, 42002, 39367, 37372, 6872, 29479, 30753,
-            10797, 24703, 18836, 51033, 52685, 48931, 23499, 24893,
-            500125, 112350, 955974, 1033654, 643440, 577050, 948722, 1045211,
-            439513, 390211, 24655, 826485, 1037208, 837007, 614895, 180705,
-            850335, 567403, 1033626, 160476, 68020, 558514, 570564, 180353,
-            616816, 65537
+            16, 461, 161, 324, 879, 104, 820, 742, 783, 795, 735, 619, 217, 267, 282, 575, 581,
+            709, 10, 698, 656, 1004, 1005, 467, 445, 787, 25345, 11322, 10856, 42540, 55356, 10564,
+            57473, 49024, 8159, 8337, 47787, 36844, 42002, 39367, 37372, 6872, 29479, 30753, 10797,
+            24703, 18836, 51033, 52685, 48931, 23499, 24893, 500125, 112350, 955974, 1033654,
+            643440, 577050, 948722, 1045211, 439513, 390211, 24655, 826485, 1037208, 837007,
+            614895, 180705, 850335, 567403, 1033626, 160476, 68020, 558514, 570564, 180353, 616816,
+            65537,
         ];
 
         for s in samples {
@@ -116,31 +125,5 @@ mod tests {
         for i in 0..8 {
             assert!((0.5 - p[i]).abs() < 0.125);
         }
-    }
-
-    #[bench]
-    fn bench_100_ahash(b: &mut Bencher) {
-        let rnd = rand::random::<u64>();
-
-        b.iter(|| {
-            let mut x = rnd;
-
-            for _ in 0..100 {
-                x = hash_ahash(x);
-            }
-
-            black_box(x);
-        });
-    }
-
-    #[bench]
-    fn bench_100_2500000_cycle_walking_fpe(b: &mut Bencher) {
-        let key = rand::random::<u64>();
-
-        b.iter(|| {
-            for i in 0..100 {
-                black_box(cycle_walking_fpe(i, 2_500_000, key));
-            }
-        });
     }
 }
